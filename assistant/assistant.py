@@ -4,9 +4,8 @@
 # Licensed under the MIT License.
 
 import os
+import sys
 import time
-print(os.environ['AZURE_OPENAI_ENDPOINT'])
-print(os.environ['CHAT_COMPLETIONS_DEPLOYMENT_NAME'])
 
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
@@ -14,6 +13,14 @@ from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import rpm.rpm
 import assistant_funcs.assistant_funcs
 
+# Parse user inputs. Usage: `python3 assistant.py <path to .rpm file>`
+# TODO: Do this properly
+if len(sys.argv) != 2:
+    raise ValueError("Usage: python3 assistant.py <path to .rpm file>")
+rpm_file = sys.argv[1]
+
+print(f"AZURE_OPENAI_ENDPOINT:{os.environ['AZURE_OPENAI_ENDPOINT']}")
+print(f"CHAT_COMPLETIONS_DEPLOYMENT_NAME:{os.environ['CHAT_COMPLETIONS_DEPLOYMENT_NAME']}")
 endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
 deployment = os.environ["CHAT_COMPLETIONS_DEPLOYMENT_NAME"]
 
@@ -23,14 +30,18 @@ client = AzureOpenAI(
     azure_endpoint=endpoint,
     azure_ad_token_provider=token_provider,
     api_version="2024-05-01-preview",
+    max_retries=20,
 )
 
 tools = assistant_funcs.assistant_funcs.OpenAiAssistantFuncManager()
 tools.addFunction(rpm.rpm.RpmFileList())
+feedbackTool = assistant_funcs.assistant_funcs.APIFeedbackFunc()
+tools.addFunction(feedbackTool)
 
 import json
 print(json.dumps(tools.getFunctions(), indent=2))
 
+# https://platform.openai.com/docs/api-reference/assistants/createAssistant
 license_assistant = client.beta.assistants.create(
     name="License Assistant",
     instructions=f"You are a very skilled AI assistant that specializes in working with open source project licenses. "
@@ -44,8 +55,6 @@ license_assistant = client.beta.assistants.create(
 
 thread = client.beta.threads.create()
 
-rpm_file = "../nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm"
-
 message = client.beta.threads.messages.create(
     thread_id=thread.id,
     role="user",
@@ -57,19 +66,39 @@ run = client.beta.threads.runs.create(
     assistant_id=license_assistant.id,
 )
 
+# TODO: YucK https://community.openai.com/t/any-way-to-duplicate-a-thread/660969/2
 def wait_for_run(run):
+    # Throttle the rate of requests
+    time.sleep(1)
     run = client.beta.threads.runs.retrieve(thread_id=thread.id,run_id=run.id)
     status = run.status
+
+    sleep = 1
     while status not in ["completed", "cancelled", "expired", "failed", "requires_action"]:
-        print(f"Run status: {run.status}")
-        time.sleep(1)
+        time.sleep(sleep)
+        sleep += 1
         run = client.beta.threads.runs.retrieve(thread_id=thread.id,run_id=run.id)
         status = run.status
+        print(f"Run status: {status}")
+
+    if run.status == "failed" and run.last_error.code == "rate_limit_exceeded":
+        # Error will be of the form "Rate limit exceeded. Please try again in <NUMBER> seconds."
+        # Try to parse the number of seconds and sleep for that amount of time.
+        sleepTime = int(run.last_error.message.split(" ")[-2]) + 5
+
+        print(f"Rate limit exceeded, retrying in {sleepTime} seconds")
+        time.sleep(sleepTime)
+
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=license_assistant.id,
+        )
+
+
     return run
 
 while run.status not in ["completed", "cancelled", "expired", "failed"]:
     run = wait_for_run(run)
-
     if run.status == "requires_action":
         if run.required_action.type != "submit_tool_outputs":
             raise ValueError(f"Unhandled action type: {run.required_action.type}")
@@ -86,7 +115,6 @@ while run.status not in ["completed", "cancelled", "expired", "failed"]:
             run_id=run.id,
             tool_outputs=tool_results
         )
-
 # Dump run:
 print(run.model_dump_json(indent=2))
 
@@ -94,3 +122,23 @@ print(run.model_dump_json(indent=2))
 messages = client.beta.threads.messages.list(thread_id=thread.id)
 for message in messages:
     print(f"{message.role}: {message.content}")
+
+message = client.beta.threads.messages.create(
+    thread_id=thread.id,
+    role="user",
+    content=f"Having analyzed the contents of the .rpm file, please provide feedback on the API."
+)
+run = client.beta.threads.runs.create(
+    thread_id=thread.id,
+    assistant_id=license_assistant.id,
+    tool_choice=feedbackTool.choice()
+)
+run = wait_for_run(run)
+if not run.status == "requires_action":
+    raise ValueError(f"Unexpected run status: {run.status}")
+if run.required_action.type != "submit_tool_outputs":
+    raise ValueError(f"Unexpected action type: {run.required_action.type}")
+
+tool_calls = run.required_action.submit_tool_outputs.tool_calls
+for tool_call in tool_calls:
+    tools.callFunction(tool_call.function.name, tool_call.function.arguments)

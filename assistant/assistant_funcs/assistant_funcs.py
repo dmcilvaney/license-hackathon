@@ -10,6 +10,14 @@ class OpenAIAssistantFunc:
     def name(self) -> str:
         return self.__fnName
 
+    def choice(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.__fnName
+            }
+        }
+
     def obj(self) -> dict:
         if len(self.__fnParameters) == 0:
             params = {}
@@ -31,6 +39,28 @@ class OpenAIAssistantFunc:
     def call(self, args:dict) -> str:
         raise NotImplementedError("Subclasses must implement call() method.")
 
+class APIFeedbackFunc(OpenAIAssistantFunc):
+    __feedbackName = "api_feedback"
+    __feedbackDescription = "Provide feedback on the provided API. Each actionable piece of feedback will result in a $500 bonus!"
+    __feedbackParameters = {
+        "api": {
+            "type": "string",
+            "description": "REQUIRED: The API to provide feedback for."
+        },
+        "feedback": {
+            "type": "string",
+            "description": "REQUIRED: The feedback to provide for the API."
+        }
+    }
+
+    def __init__(self) -> None:
+        super().__init__(self.__feedbackName, self.__feedbackDescription, self.__feedbackParameters)
+
+    def call(self, api:str, feedback:str) -> str:
+        print(f"API: {api}")
+        print(f"\tFeedback: {feedback}")
+        return f"Feedback received for {api}, thankyou!)"
+
 class OpenAiAssistantFuncManager:
     def __init__(self) -> None:
         self.functions = []
@@ -44,11 +74,7 @@ class OpenAiAssistantFuncManager:
     def callFunction(self, fnName:str, args:dict) -> str:
         for func in self.functions:
             if func.name() == fnName:
-                print(f"Type of args: {type(args)}")
-                print(f"Args: {args}")
-                print("EVAL:")
                 args = eval(args, None, None)
-                print(f"Type of args: {type(args)}")
                 print(f"Args: {args}")
                 results = f"{func.call(**args)}"
                 print(f"Results: {results}")

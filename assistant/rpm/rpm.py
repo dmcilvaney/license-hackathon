@@ -30,84 +30,141 @@ def rpm_query(filePath: str, args: list[str]) -> list[str]:
     output = [file for file in output if file]
     return output
 
-def truncate_path(path: str, depth: int) -> str:
-    if depth == 0:
-        if path != "/":
-            return "/..."
-        else:
-            return path
-
-    depth = depth + 1
-
-    res = ""
-    parts = path.split("/")
-    if len(parts) > depth:
-        res =  "/".join(parts[:depth])
+def format_single_path(path: str, search_dir:str, depth: int, directory_set: set[str], license_set: set[str], document_set: set[str]) -> str:
+    # Remove the search_dir from the path
+    res = path[len(search_dir):]
+    if res.startswith(os.path.sep):
+        res = res[1:]
+    # Split the path into components
+    components = res.split(os.path.sep)
+    # Truncate the path to the specified depth
+    #print(f"TEST: {components}")
+    did_prune = False
+    if depth > 0:
+        pruned_components = components[:depth]
+        #print(f"TEST: {pruned_components}")
+        did_prune = len(pruned_components) < len(components)
+        components = pruned_components
+    # Rejoin the components
+    res = os.path.sep.join(components)
+    # Restore the search_dir
+    res = os.path.join(search_dir, res)
+    # If we pruned the path, add an ellipsis
+    if did_prune:
+        res = os.path.join(res,"...")
+    # Prefix the path with the appropriate prefix
+    if path in directory_set:
+        res = f"{RpmFileList.dir_prefix}{res}"
+    elif path in license_set:
+        res = f"{RpmFileList.license_prefix}{res}"
+    elif path in document_set:
+        res = f"{RpmFileList.doc_prefix}{res}"
     else:
-        res = path
-    if res != path:
-        res = res + "/..."
+        res = f"{RpmFileList.file_prefix}{res}"
+
     return res
 
-def rpm_get_contents(filePath: str, rootDir:str, depth:int) -> list[str]:
-    print(f"filePath={filePath}, rootDir={rootDir}, depth={depth}")
-    all_files_and_dirs = rpm_query(filePath, ["-q", "--qf", "[%{FILEMODES:perms} %{FILENAMES}\n]"])
-    all_files = [file.split(' ', 1)[1] for file in all_files_and_dirs if file[0] != "d"]
-    all_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs if file[0] == "d"]
-
-    # Filter out files and directories that are not in the root directory
-    if rootDir:
-        all_files = [file for file in all_files if file.startswith(rootDir)]
-        all_dirs = [dir for dir in all_dirs if dir.startswith(rootDir)]
-
-    # Truncate any parts of the path that are deeper than the requested depth.
-    # ie if depth is 1, then /usr/bin will be truncated to /usr.
-    all_files = [truncate_path(f, depth) for f in all_files]
-    all_dirs = [truncate_path(d, depth) for d in all_dirs]
-
-    # Remove duplicates
-    all_files = list(set(all_files))
-    all_dirs = list(set(all_dirs))
-
-    # Prefix each entry with 'd:' if it is a directory, and 'f:' if it is a file
-    all_files = [f"f:{file}" for file in all_files]
-    all_dirs = [f"d:{dir}" for dir in all_dirs]
-
-    # Sort and return the lists, but sort by path. (ie ignore "d:" and "f:" prefixes when sorting.)
-    results = all_dirs + all_files
-    results.sort(key=lambda x: x[2:])
-    return results
-
 class RpmFileList(assistant_funcs.OpenAIAssistantFunc):
+    dir_prefix = "dir:"
+    file_prefix = "file:"
+    license_prefix = "license:"
+    doc_prefix = "doc:"
+
     __rpmFileListName = "rpm_file_list"
     __rpmFileListDescription =  ("Get a list of files and directories in an RPM file. This is expensive to call, so minimize the scope of the search where reasonable. "
-                                 "Each entry in the list is prefixed with 'd:' if it is a directory, and 'f:' if it is a file.")
+                                 f"Each entry in the list is prefixed with '{dir_prefix}:' for directories, '{license_prefix}:' for license files, '{doc_prefix}:' for "
+                                 f"documentation files, or '{file_prefix}:' for all other files, as understood by `rpm -q...`.")
     __rpmFileListParameters = {
             "rpm_file": {
                 "type": "string",
                 "description": "REQUIRED: The path to the RPM file to get the file list for."
             },
-            "root_dir": {
+            "search_dir": {
                 "type": "string",
-                "description": "OPTIONAL (default '/'): The subdirectory to search inside. ie '/' might list ['/', '/usr', '/var'], while '/var' might list ['/var', '/var/log',  '/var/lib']."
+                "description": "OPTIONAL (default '/'): The subdirectory to search from. ie '/' might list ['/', '/usr', '/var'], while '/var' might list ['/var', '/var/log',  '/var/lib']."
             },
-            "depth": {
+            "max_depth": {
                 "type": "integer",
-                "description": "OPTIONAL (default '1'): How many levels deep to search. 0 is just the root directory, 1 is the root directory and its immediate children, etc."
+                "description": "OPTIONAL (default '0'): From the search_dir, limit the depth of the search. ie 1 would only list the immediate children of the search_dir. 0 means no limit."
             }
         }
 
+    class CacheEntry:
+        def __init__(self, all_files_and_dirs: list[str], dirs_set: set[str], licenses_set: set[str], docs_set: set[str]) -> None:
+            self.all_files_and_dirs = all_files_and_dirs
+            self.dirs_set = dirs_set
+            self.licenses_set = licenses_set
+            self.docs_set = docs_set
+
+    # Shared rpm cache. Stores a list of files, licenses, docs, and dirs for each rpm file. Key is the rpm file path.
+    rpm_cache = None
+
     def __init__(self) -> None:
         super().__init__(self.__rpmFileListName, self.__rpmFileListDescription, self.__rpmFileListParameters)
+        if RpmFileList.rpm_cache is None:
+            RpmFileList.rpm_cache = {}
 
-    def call(self, rpm_file:str, root_dir:str="/", depth:int=1) -> str:
+    def call(self, rpm_file:str, search_dir:str="/", max_depth:int=0) -> str:
         # Check if file exists!
         abs_path = os.path.abspath(rpm_file)
         if not os.path.exists(abs_path):
-            raise ValueError(f"File not found: {abs_path}")
-        return rpm_get_contents(rpm_file, root_dir, depth)
+            err = ValueError(f"File not found: {abs_path}")
+            return f"{err}"
+        if max_depth < 0:
+            err = ValueError(f"max_depth must be greater than or equal to 0")
+            return f"{err}"
+        return self.rpm_get_contents(rpm_file, search_dir, max_depth)
+
+    def format_output(self, filePath: str, search_dir:str, depth:int) -> list[str]:
+        directory_set = self.rpm_cache[filePath].dirs_set
+        license_set = self.rpm_cache[filePath].licenses_set
+        document_set = self.rpm_cache[filePath].docs_set
+
+        all_files = self.rpm_cache[filePath].all_files_and_dirs
+
+        # Normalize paths
+        search_dir = os.path.normpath(search_dir)
+        all_files = [os.path.normpath(file) for file in all_files]
+
+        # Filter out files and directories that are not in the root directory
+        if search_dir:
+            all_files = [file for file in all_files if file.startswith(search_dir)]
+
+        # Format the paths
+        all_files = [format_single_path(file, search_dir, depth, directory_set, license_set, document_set) for file in all_files]
+
+        # Remove duplicates
+        all_files = list(set(all_files))
+
+        # Sort based on everything after <type>:...
+        all_files.sort(key=lambda x: x.split(":", 1)[1])
+
+        return all_files
+
+    def rpm_get_contents(self, filePath: str, search_dir:str, depth:int) -> list[str]:
+        # Populate cache on first run
+        if not filePath in RpmFileList.rpm_cache:
+            print(f"Populating cache for {filePath}")
+            all_files_and_dirs = rpm_query(filePath, ["-q", "--qf", "[%{FILEMODES:perms} %{FILENAMES}\n]"])
+            all_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs if file[0] == "d"]
+            # Strip the permissions from the files
+            all_files_and_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs]
+            licenses = rpm_query(filePath, ["-qL"])
+            docs = rpm_query(filePath, ["-qd"])
+            RpmFileList.rpm_cache[filePath] = RpmFileList.CacheEntry(all_files_and_dirs, set(all_dirs), set(licenses), set(docs))
+            entry = RpmFileList.rpm_cache[filePath]
+            #print(f"DEBUG: Cache entry is {entry.all_files_and_dirs}")
+            #print(f"DEBUG: Cache entry is {entry.dirs_set}")
+            #print(f"DEBUG: Cache entry is {entry.licenses_set}")
+            #print(f"DEBUG: Cache entry is {entry.docs_set}")
+
+        return self.format_output(filePath, search_dir, depth)
 
 # Only run tests when this file is run directly
 if __name__ == "__main__":
-    for line in rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/", 1):
+    rpm = RpmFileList()
+    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 2):
+        print(line)
+
+    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 1):
         print(line)
