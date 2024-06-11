@@ -8,7 +8,7 @@ pip install -r requirements.txt
 ```
 
 ```bash
-# Get all the requipred bits for testing nano.spec
+# Get all the required bits for testing nano.spec
 ./setup.sh
 ```
 
@@ -20,5 +20,9 @@ if ! az account show > /dev/null 2>&1; then
 fi
 export AZURE_OPENAI_ENDPOINT="https://damcilva-license-check-test.openai.azure.com/"
 export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
+# Story agent
 ./test1.py
+
+# Assistant agent
+./assistant/assistant.py
 ```

@@ -60,7 +60,7 @@ def rpm_get_contents(filePath: str, rootDir:str, depth:int) -> list[str]:
         all_files = [file for file in all_files if file.startswith(rootDir)]
         all_dirs = [dir for dir in all_dirs if dir.startswith(rootDir)]
 
-    # Truncate any parts of the path that are deaper than the requested depth.
+    # Truncate any parts of the path that are deeper than the requested depth.
     # ie if depth is 1, then /usr/bin will be truncated to /usr.
     all_files = [truncate_path(f, depth) for f in all_files]
     all_dirs = [truncate_path(d, depth) for d in all_dirs]
