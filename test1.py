@@ -19,10 +19,10 @@ client = AzureOpenAI(
 )
 
 favorite_things = {
-    "strawberry": "maroon",
-    "lightsaber": "lime green",
-    "holiday": "turquoise",
-    "desk": "tan",
+    "coffee": "pink",
+    "dog": "golden",
+    "car": "yellow",
+    "curry": "violet",
 }
 
 hated_things = ["spiders", "mushrooms", "clowns", "darkness", "loud noises", "being cold"]
