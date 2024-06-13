@@ -225,13 +225,13 @@ class RpmDependencyInfo(assistant_funcs.OpenAIAssistantFunc):
         return provides + requires
 
 class RpmReadFile(assistant_funcs.OpenAIAssistantFunc):
-    __rpmDependencyInfoName = "rpm_read_file"
-    __rpmDependencyInfoDescription  =  ("Prints the content of a file inside an RPM file. If the file does not appear to be a text file an error will be returned."
+    __rpm_read_file_name = "rpm_read_file"
+    __rpm_read_file_description  =  ("Prints the content of a file inside an RPM file. If the file does not appear to be a text file an error will be returned."
                                         "The tool will refuse to read files that cannot be decoded as UTF-8.")
-    __rpmDependencyInfoParameters = {
+    __rpm_read_file_parameters = {
             "rpm_file": {
                 "type": "string",
-                "description": "REQUIRED: The path to the RPM file to get the requires and provides for."
+                "description": "REQUIRED: The path to the RPM file read the file from."
             },
             "file_path": {
                 "type": "string",
@@ -244,7 +244,7 @@ class RpmReadFile(assistant_funcs.OpenAIAssistantFunc):
         }
 
     def __init__(self) -> None:
-        super().__init__(self.__rpmDependencyInfoName, self.__rpmDependencyInfoDescription, self.__rpmDependencyInfoParameters)
+        super().__init__(self.__rpm_read_file_name, self.__rpm_read_file_description, self.__rpm_read_file_parameters)
 
     def call(self, rpm_file:str, file_path:str, max_lines:int=10) -> str:
         # Check if file exists!
@@ -290,7 +290,7 @@ class RpmReadFile(assistant_funcs.OpenAIAssistantFunc):
                     if len(lines) > max_lines:
                         lines = lines[:max_lines]
                     # Join the lines into a single string with '\n' between each line
-                    lines = "\n".join(lines)
+                    lines = "".join(lines)
                     return lines
             except UnicodeDecodeError:
                 err = ValueError(f"File '{rpm_file}' does not appear to be a text file, refusing to print.")

@@ -15,181 +15,180 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
 from assistant_funcs import assistant_funcs
 
+def sanitize_path(top_build_dir, path):
+    top_build_dir = os.path.abspath(top_build_dir)
+    path = os.path.normpath(path)
 
-def rpm_query(filePath: str, args: list[str]) -> list[str]:
-    cmd = ["rpm"] + args + [filePath]
-    # Run the bash script and capture the output.
-    output = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+    # Ensure we don't go outside the build directory
+    if ".." in path:
+        raise ValueError(f"Error: search_dir cannot go outside the build directory, do not use '..' in the path.")
 
+    final_path = os.path.join(top_build_dir, path)
+    final_path = os.path.abspath(final_path)
+    return final_path
 
-    # If the output has the string '(contains no files)', then there are no files to list
-    if "(contains no files)" in output:
-        return []
+class SrpmCache:
+    srpm_cache = {}
+    class SrpmCacheEntry:
+        def __init__(self, top_build_dir) -> None:
+            self.top_build_dir = top_build_dir
 
-    output = output.split("\n")
-    output = [file for file in output if file]
-    return output
+    def get_from_cache(self, srpm_file):
+        if not srpm_file in self.srpm_cache:
+            # Hack for testing, hard-code the topdir
+            self.srpm_cache[srpm_file] = SrpmCache.SrpmCacheEntry("/home/damcilva/repos/license-hackathon/nano-testing/build/BUILD")
+        return self.srpm_cache[srpm_file].top_build_dir
 
-def format_single_path(path: str, search_dir:str, depth: int, directory_set: set[str], license_set: set[str], document_set: set[str]) -> str:
-    # Remove the search_dir from the path
-    res = path[len(search_dir):]
-    if res.startswith(os.path.sep):
-        res = res[1:]
-    # Split the path into components
-    components = res.split(os.path.sep)
-    # Truncate the path to the specified depth
-    #print(f"TEST: {components}")
-    did_prune = False
-    if depth > 0:
-        pruned_components = components[:depth]
-        #print(f"TEST: {pruned_components}")
-        did_prune = len(pruned_components) < len(components)
-        components = pruned_components
-    # Rejoin the components
-    res = os.path.sep.join(components)
-    # Restore the search_dir
-    res = os.path.join(search_dir, res)
-    # If we pruned the path, add an ellipsis
-    if did_prune:
-        res = os.path.join(res,"...")
-    # Prefix the path with the appropriate prefix
-    if path in directory_set:
-        res = f"{RpmFileList.dir_prefix}{res}"
-    elif path in license_set:
-        res = f"{RpmFileList.license_prefix}{res}"
-    elif path in document_set:
-        res = f"{RpmFileList.doc_prefix}{res}"
-    else:
-        res = f"{RpmFileList.file_prefix}{res}"
+srpm_cache = SrpmCache()
 
-    return res
-
-class RpmName(assistant_funcs.OpenAIAssistantFunc):
-    __rpmNameName = "rpm_name"
-    __rpmNameDescription =  "Get the name of an RPM file as understood by `rpm -q...`."
-    __rpmNameParameters = {
-            "rpm_file": {
-                "type": "string",
-                "description": "REQUIRED: The path to the RPM file to get the name of."
-            }
-        }
-
-    def __init__(self) -> None:
-        super().__init__(self.__rpmNameName, self.__rpmNameDescription, self.__rpmNameParameters)
-
-    def call(self, rpm_file:str) -> str:
-        # Check if file exists!
-        abs_path = os.path.abspath(rpm_file)
-        if not os.path.exists(abs_path):
-            err = ValueError(f"File not found: {abs_path}")
-            return f"{err}"
-        return self.rpm_get_name(rpm_file)
-
-    def rpm_get_name(self, filePath: str) -> str:
-        name = rpm_query(filePath, ["-q", "--qf", "%{NAME}"])
-        return name[0]
-
-class RpmFileList(assistant_funcs.OpenAIAssistantFunc):
+class SrpmExploreFiles(assistant_funcs.OpenAIAssistantFunc):
     dir_prefix = "dir:"
     file_prefix = "file:"
-    license_prefix = "license:"
-    doc_prefix = "doc:"
-
-    __rpmFileListName = "rpm_file_list"
-    __rpmFileListDescription =  ("Get a list of files and directories in an RPM file. This is expensive to call, so minimize the scope of the search where reasonable. "
-                                 f"Each entry in the list is prefixed with '{dir_prefix}' for directories, '{license_prefix}' for license files, '{doc_prefix}' for "
-                                 f"documentation files, or '{file_prefix}' for all other files, as understood by `rpm -q...`.")
-    __rpmFileListParameters = {
-            "rpm_file": {
+    __srpm_explore_files_name = "srpm_explore_files"
+    __srpm_explore_files_description =  ("Explores the files created by running `rpmbuild -bp` on an SRPM file. "
+                                        "This function will return a list of files and directories. "
+                                        f"Each entry in the list is prefixed with '{dir_prefix}' for directories, '{file_prefix}' for files"
+                                        "Be cautious when setting max_depth beyond 1 or 2, as this may result in a large number of files being returned.")
+    __srpm_explore_files_parameters = {
+            "srpm_file": {
                 "type": "string",
-                "description": "REQUIRED: The path to the RPM file to get the file list for."
+                "description": "REQUIRED: The path to the SRPM file to get the file list for."
             },
             "search_dir": {
                 "type": "string",
-                "description": "OPTIONAL (default '/'): The subdirectory to search from. ie '/' might list ['/', '/usr', '/var'], while '/var' might list ['/var', '/var/log',  '/var/lib']."
+                "description": "OPTIONAL (default '.'): The subdirectory to search from. ie './' might list ['./mypkg-v1/src', './mypkg-v1/docs', './mypkg-v1/readme.md', ...], "
+                "while './mypkg-v1/src' might list ['./mypkg-v1/tool.c', './mypkg-v1/header.h', ...]. "
+                "All paths are relative to the /usr/src/<dist>/BUILD directory. No paths will be allowed outside of this directory."
             },
             "max_depth": {
                 "type": "integer",
-                "description": "OPTIONAL (default '0'): From the search_dir, limit the depth of the search. ie 1 would only list the immediate children of the search_dir. 0 means no limit."
+                "description": "OPTIONAL (default '2'): From the search_dir, limit the depth of the search. ie 1 would only list the immediate children of the search_dir. 0 means no limit."
             }
         }
 
-    class CacheEntry:
-        def __init__(self, all_files_and_dirs: list[str], dirs_set: set[str], licenses_set: set[str], docs_set: set[str]) -> None:
-            self.all_files_and_dirs = all_files_and_dirs
-            self.dirs_set = dirs_set
-            self.licenses_set = licenses_set
-            self.docs_set = docs_set
-
     # Shared rpm cache. Stores a list of files, licenses, docs, and dirs for each rpm file. Key is the rpm file path.
-    rpm_cache = None
+    srpm_cache = None
 
     def __init__(self) -> None:
-        super().__init__(self.__rpmFileListName, self.__rpmFileListDescription, self.__rpmFileListParameters)
-        if RpmFileList.rpm_cache is None:
-            RpmFileList.rpm_cache = {}
+        super().__init__(self.__srpm_explore_files_name, self.__srpm_explore_files_description, self.__srpm_explore_files_parameters)
+        if SrpmExploreFiles.srpm_cache is None:
+            SrpmExploreFiles.srpm_cache = {}
 
-    def call(self, rpm_file:str, search_dir:str="/", max_depth:int=0) -> str:
+    def call(self, srpm_file:str, search_dir:str=".", max_depth:int=1) -> str:
         # Check if file exists!
-        abs_path = os.path.abspath(rpm_file)
+        abs_path = os.path.abspath(srpm_file)
         if not os.path.exists(abs_path):
             err = ValueError(f"File not found: {abs_path}")
             return f"{err}"
         if max_depth < 0:
             err = ValueError(f"max_depth must be greater than or equal to 0")
             return f"{err}"
-        return self.rpm_get_contents(rpm_file, search_dir, max_depth)
+        return self.srpm_explore_contents(srpm_file, search_dir, max_depth)
 
-    def format_output(self, filePath: str, search_dir:str, depth:int) -> list[str]:
-        directory_set = self.rpm_cache[filePath].dirs_set
-        license_set = self.rpm_cache[filePath].licenses_set
-        document_set = self.rpm_cache[filePath].docs_set
+    def srpm_explore_contents(self, srpm_file: str, search_dir:str, depth: int) -> list[str]:
+        build_dir = srpm_cache.get_from_cache(srpm_file)
+        #base_path_abs = sanitize_path(build_dir, ".")
+        try:
+            final_path = sanitize_path(build_dir, search_dir)
+        except ValueError as e:
+            return e
 
-        all_files = self.rpm_cache[filePath].all_files_and_dirs
+        # Get all files and dirs using 'find'
+        files = []
+        dirs = []
+        base_depth = final_path.count(os.path.sep)
+        p_debug = True
+        for root, dir_list, file_list in os.walk(final_path):
+            relative_depth = root.count(os.path.sep) - base_depth
 
-        # Normalize paths
-        search_dir = os.path.normpath(search_dir)
-        all_files = [os.path.normpath(file) for file in all_files]
+            if depth > 0 and relative_depth >= depth:
+                continue
 
-        # Filter out files and directories that are not in the root directory
-        if search_dir:
-            all_files = [file for file in all_files if file.startswith(search_dir)]
+            dirs.extend([os.path.join(root, dir) for dir in dir_list])
+            files.extend([os.path.join(root, file) for file in file_list])
+
+            # for file in file_list:
+            #     if os.path.isfile(os.path.join(root, file)):
+            #         files.append(os.path.join(root, file))
+            #     else:
+            #         dirs.append(os.path.join(root, file))
+
+        # Remove the common prefix from the paths
+        files = [file.removeprefix(final_path+os.path.sep) for file in files]
+        dirs = [dir.removeprefix(final_path+os.path.sep) for dir in dirs]
 
         # Format the paths
-        all_files = [format_single_path(file, search_dir, depth, directory_set, license_set, document_set) for file in all_files]
+        files = [f"{self.file_prefix}{file}" for file in files]
+        dirs = [f"{self.dir_prefix}{dir}{os.path.sep}" for dir in dirs]
 
-        # Remove duplicates
-        all_files = list(set(all_files))
-
-        # Sort based on everything after <type>:...
+        # Merge and sort
+        all_files = list(set(files + dirs))
         all_files.sort(key=lambda x: x.split(":", 1)[1])
 
         return all_files
 
-    def rpm_get_contents(self, filePath: str, search_dir:str, depth:int) -> list[str]:
-        # Populate cache on first run
-        if not filePath in RpmFileList.rpm_cache:
-            print(f"Populating cache for {filePath}")
-            all_files_and_dirs = rpm_query(filePath, ["-q", "--qf", "[%{FILEMODES:perms} %{FILENAMES}\n]"])
-            all_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs if file[0] == "d"]
-            # Strip the permissions from the files
-            all_files_and_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs]
-            licenses = rpm_query(filePath, ["-qL"])
-            docs = rpm_query(filePath, ["-qd"])
-            RpmFileList.rpm_cache[filePath] = RpmFileList.CacheEntry(all_files_and_dirs, set(all_dirs), set(licenses), set(docs))
-            entry = RpmFileList.rpm_cache[filePath]
-            #print(f"DEBUG: Cache entry is {entry.all_files_and_dirs}")
-            #print(f"DEBUG: Cache entry is {entry.dirs_set}")
-            #print(f"DEBUG: Cache entry is {entry.licenses_set}")
-            #print(f"DEBUG: Cache entry is {entry.docs_set}")
+class SrpmReadFile(assistant_funcs.OpenAIAssistantFunc):
+    __srpm_read_file_name = "srpm_read_file"
+    __rpmDependencyInfoDescription  =  ("Prints the content of a file inside an SRPM file after running the %prep stage. "
+                                        "If the file does not appear to be a text file an error will be returned. "
+                                        "The tool will refuse to read files that cannot be decoded as UTF-8.")
+    __rpmDependencyInfoParameters = {
+            "srpm_file": {
+                "type": "string",
+                "description": "REQUIRED: The path to the SRPM file read the file from."
+            },
+            "file_path": {
+                "type": "string",
+                "description": "REQUIRED: The path to the file to read."
+            },
+            "max_lines": {
+                "type": "integer",
+                "description": "OPTIONAL (default '10'): The maximum number of lines to read from the file."
+            }
+        }
 
-        return self.format_output(filePath, search_dir, depth)
+    def __init__(self) -> None:
+        super().__init__(self.__srpm_read_file_name, self.__rpmDependencyInfoDescription, self.__rpmDependencyInfoParameters)
+
+    def call(self, srpm_file:str, file_path:str, max_lines:int=10) -> str:
+        # Check if file exists!
+        abs_path = os.path.abspath(srpm_file)
+        if not os.path.exists(abs_path):
+            err = ValueError(f"File not found: {abs_path}")
+            return f"{err}"
+        if max_lines <= 0:
+            err = ValueError(f"max_lines must be greater than 0")
+            return f"{err}"
+        return self.srpm_read_file(srpm_file, file_path, max_lines)
+
+    def srpm_read_file(self, rpm_file:str, file_path:str, max_lines:int=10) -> str:
+        build_dir = srpm_cache.get_from_cache(rpm_file)
+        try:
+            final_path = sanitize_path(build_dir, file_path)
+        except ValueError as e:
+            return e
+
+        if not os.path.exists(final_path):
+            return f"File not found: {final_path}"
+
+         # Try to read the file if we can
+        try:
+            with open(final_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                if len(lines) > max_lines:
+                    lines = lines[:max_lines]
+                # Join the lines into a single string with '\n' between each line
+                lines = "".join(lines)
+                return lines
+        except UnicodeDecodeError:
+            err = ValueError(f"File '{rpm_file}' does not appear to be a text file, refusing to print.")
+            return f"{err}"
 
 # Only run tests when this file is run directly
 if __name__ == "__main__":
-    rpm = RpmFileList()
-    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 2):
+    srpm = SrpmExploreFiles()
+    for line in srpm.srpm_explore_contents("nano.src.rpm", "./nano-6.0/src", 2):
         print(line)
 
-    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 1):
-        print(line)
+    srpm_reader = SrpmReadFile()
+    print(srpm_reader.srpm_read_file("nano.src.rpm", "./nano-6.0/src/nano.c", 10))

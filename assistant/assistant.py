@@ -12,6 +12,7 @@ from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 import rpm.rpm
 import spec.spec
+import srpm.srpm
 import assistant_funcs.assistant_funcs
 
 timeout_override = 120
@@ -105,7 +106,7 @@ def create_assistant(tools):
         "The .spec file should be considered unreliable, as it may not accurately reflect the actual licensing requirements of the package. Use rpm_dependency_info() to validate all dependencies "
         " and rpm_read_file() to check the actual license files if needed."
         "\n"
-        "Be consise in your output, explanations are not important, just the final verdict and a very brief summary. Include information about dependencies where necessary. ",
+        "Be concise in your output, explanations are not important, just the final verdict and a very brief summary. Include information about dependencies where necessary. ",
         tools=tools.getFunctions(),
         model=deployment,
         timeout=timeout_override,
@@ -121,6 +122,8 @@ def get_all_tools():
     tools.addFunction(spec.spec.SpecContents())
     tools.addFunction(assistant_funcs.assistant_funcs.APIFeedbackFunc())
     tools.addFunction(ProvideAssessmentFunc())
+    tools.addFunction(srpm.srpm.SrpmExploreFiles())
+    tools.addFunction(srpm.srpm.SrpmReadFile())
 
     # import json
     # print(json.dumps(tools.getFunctions(), indent=2))
@@ -253,6 +256,23 @@ if __name__ == "__main__":
             license_assistant,
             tools,
         )
+
+    # runner.add_prompt(
+    #     f"Analyse the contents of the following files:{files} and determine if the .spec file contains the correct licensing information. "
+    #     "Determine this from first principles by examining the contents of the .srpm."
+    # )
+    # runner.run_agent()
+
+    # runner.add_prompt(
+    #     f"Check for any hidden license requirements that may not be obvious from a cursory examination of the sources. "
+    #     "Look for source files that may introduce unexpected licensing requirements that are not accurately "
+    #     "reflected in the obvious license files. Individual source files may have different licenses than the package as a whole. "
+    # )
+    # runner.run_agent()
+    # for result in runner.get_last_n_results():
+    #     print(result)
+
+    # exit(1)
 
     #runner.add_prompt(p1)
     # runner.run_agent()
