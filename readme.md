@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-sudo tdnf install azure-cli dnf-utils
+sudo tdnf install azure-cli dnf-utils ncurses-devel
 pip install -r requirements.txt
 ```
 
