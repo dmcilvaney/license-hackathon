@@ -20,9 +20,10 @@ if ! az account show > /dev/null 2>&1; then
 fi
 export AZURE_OPENAI_ENDPOINT="https://damcilva-license-check-test.openai.azure.com/"
 export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
+
 # Story agent
 ./test1.py
 
 # Assistant agent
-./assistant/assistant.py
+./assistant/assistant.py "./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm"
 ```
