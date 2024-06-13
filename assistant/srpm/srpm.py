@@ -11,11 +11,9 @@
 import os
 import subprocess
 import sys
-import time
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
 from assistant_funcs import assistant_funcs
-import tempfile
 
 
 def rpm_query(filePath: str, args: list[str]) -> list[str]:
@@ -98,7 +96,7 @@ class RpmFileList(assistant_funcs.OpenAIAssistantFunc):
     doc_prefix = "doc:"
 
     __rpmFileListName = "rpm_file_list"
-    __rpmFileListDescription =  ("Get a list of files and directories in an RPM file. The results may be filtered to reduce extraneous clutter."
+    __rpmFileListDescription =  ("Get a list of files and directories in an RPM file. This is expensive to call, so minimize the scope of the search where reasonable. "
                                  f"Each entry in the list is prefixed with '{dir_prefix}' for directories, '{license_prefix}' for license files, '{doc_prefix}' for "
                                  f"documentation files, or '{file_prefix}' for all other files, as understood by `rpm -q...`.")
     __rpmFileListParameters = {
@@ -171,6 +169,7 @@ class RpmFileList(assistant_funcs.OpenAIAssistantFunc):
     def rpm_get_contents(self, filePath: str, search_dir:str, depth:int) -> list[str]:
         # Populate cache on first run
         if not filePath in RpmFileList.rpm_cache:
+            print(f"Populating cache for {filePath}")
             all_files_and_dirs = rpm_query(filePath, ["-q", "--qf", "[%{FILEMODES:perms} %{FILENAMES}\n]"])
             all_dirs = [file.split(' ', 1)[1] for file in all_files_and_dirs if file[0] == "d"]
             # Strip the permissions from the files
@@ -186,130 +185,11 @@ class RpmFileList(assistant_funcs.OpenAIAssistantFunc):
 
         return self.format_output(filePath, search_dir, depth)
 
-class RpmDependencyInfo(assistant_funcs.OpenAIAssistantFunc):
-    __rpmDependencyInfoName = "rpm_dependency_info"
-    __rpmDependencyInfoDescription  =  ("Print everything a package provides and requires. Each line is prefixed with 'provides:' or 'requires:'. "
-                                    "This dependency information will more accurate than trying to parse the spec file. ")
-    __rpmDependencyInfoParameters = {
-            "rpm_file": {
-                "type": "string",
-                "description": "REQUIRED: The path to the RPM file to get the requires and provides for."
-            }
-        }
-
-    def __init__(self) -> None:
-        super().__init__(self.__rpmDependencyInfoName, self.__rpmDependencyInfoDescription, self.__rpmDependencyInfoParameters)
-
-    def call(self, rpm_file:str, search_dir:str="/", max_depth:int=0) -> str:
-        # Check if file exists!
-        abs_path = os.path.abspath(rpm_file)
-        if not os.path.exists(abs_path):
-            err = ValueError(f"File not found: {abs_path}")
-            return f"{err}"
-        if max_depth < 0:
-            err = ValueError(f"max_depth must be greater than or equal to 0")
-            return f"{err}"
-        return self.rpm_get_dep_info(rpm_file)
-
-    def rpm_get_dep_info(self, filePath: str) -> list[str]:
-        provides = rpm_query(filePath, ["-qp", "--provides", filePath])
-        requires = rpm_query(filePath, ["-qp", "--requires", filePath])
-        # sort
-        provides.sort()
-        requires.sort()
-
-        # prefix
-        provides = [f"provides:{p}" for p in provides]
-        requires = [f"requires:{r}" for r in requires]
-
-        return provides + requires
-
-class RpmReadFile(assistant_funcs.OpenAIAssistantFunc):
-    __rpmDependencyInfoName = "rpm_read_file"
-    __rpmDependencyInfoDescription  =  ("Prints the content of a file inside an RPM file. If the file does not appear to be a text file an error will be returned."
-                                        "The tool will refuse to read files that cannot be decoded as UTF-8.")
-    __rpmDependencyInfoParameters = {
-            "rpm_file": {
-                "type": "string",
-                "description": "REQUIRED: The path to the RPM file to get the requires and provides for."
-            },
-            "file_path": {
-                "type": "string",
-                "description": "REQUIRED: The path to the file to read."
-            },
-            "max_lines": {
-                "type": "integer",
-                "description": "OPTIONAL (default '10'): The maximum number of lines to read from the file."
-            }
-        }
-
-    def __init__(self) -> None:
-        super().__init__(self.__rpmDependencyInfoName, self.__rpmDependencyInfoDescription, self.__rpmDependencyInfoParameters)
-
-    def call(self, rpm_file:str, file_path:str, max_lines:int=10) -> str:
-        # Check if file exists!
-        abs_path = os.path.abspath(rpm_file)
-        if not os.path.exists(abs_path):
-            err = ValueError(f"File not found: {abs_path}")
-            return f"{err}"
-        if max_lines <= 0:
-            err = ValueError(f"max_lines must be greater than 0")
-            return f"{err}"
-        return self.rpm_read_file(rpm_file, file_path, max_lines)
-
-    def rpm_read_file(self, rpm_file:str, file_path:str, max_lines:int=10) -> str:
-        # cpio archives prepend '.' to every path, ensure that is added to the file path
-        if not file_path.startswith('.'):
-            file_path = f".{file_path}"
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_file = os.path.join(tmp_dir, "file")
-            with open(tmp_file, 'wb') as f:
-                # Get the cpio
-                rpm_cmd = subprocess.Popen(["rpm2cpio", rpm_file], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                # Extract the file
-                cpio_cmd = subprocess.Popen(["cpio", "-i", "--to-stdout", file_path], stdin=rpm_cmd.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                # Write to the destination
-                f.write(cpio_cmd.stdout.read())
-                # Flush the pipes to ensure the return codes are correct
-                rpm_cmd.communicate()
-                cpio_cmd.communicate()
-                if rpm_cmd.wait():
-                    stderr = rpm_cmd.communicate()[1].decode('utf-8')
-                    err = ValueError(f"rpm2cpio command failed with return code {rpm_cmd.returncode}, error: {stderr}")
-                    return f"{err}"
-                if cpio_cmd.wait():
-                    stderr = cpio_cmd.communicate()[1].decode('utf-8')
-                    err = ValueError(f"cpio command failed with return code {cpio_cmd.returncode}, error: {stderr}")
-                    return f"{err}"
-
-            # Try to read the file if we can
-            try:
-                with open(tmp_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    if len(lines) > max_lines:
-                        lines = lines[:max_lines]
-                    # Join the lines into a single string with '\n' between each line
-                    lines = "\n".join(lines)
-                    return lines
-            except UnicodeDecodeError:
-                err = ValueError(f"File '{rpm_file}' does not appear to be a text file, refusing to print.")
-                return f"{err}"
-
-
 # Only run tests when this file is run directly
 if __name__ == "__main__":
-    rpm1 = RpmFileList()
-    rpm2 = RpmFileList()
-    for line in rpm1.rpm_get_contents("./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm", "/usr//share/", 4):
+    rpm = RpmFileList()
+    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 2):
         print(line)
 
-    for line in rpm2.rpm_get_contents("./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm", "/usr//share/", 1):
+    for line in rpm.rpm_get_contents("../nano-testing/rpms/nano-lang-6.0-2.cm2.x86_64.rpm", "/usr//share/", 1):
         print(line)
-
-    depInfo = RpmDependencyInfo()
-    print(depInfo.rpm_get_dep_info("./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm"))
-
-    readFile = RpmReadFile()
-    print(readFile.rpm_read_file("./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm", "./usr/share/doc/nano-6.0/nano.html", 20))
-    print(readFile.rpm_read_file("./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm", "./usr/bin/nano", 20))

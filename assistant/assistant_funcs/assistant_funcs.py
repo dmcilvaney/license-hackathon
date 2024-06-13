@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import json
+
 class OpenAIAssistantFunc:
     def __init__(self, fnName:str, fnDescription:str, fnParameters:dict) -> None:
         self.__fnName = fnName
@@ -66,7 +68,9 @@ class OpenAiAssistantFuncManager:
         self.functions = []
 
     def addFunction(self, func:OpenAIAssistantFunc) -> None:
-        self.functions.append(func)
+        # Don't add duplicate functions
+        if func not in self.functions:
+            self.functions.append(func)
 
     def getFunctions(self) -> list[dict]:
         return [func.obj() for func in self.functions]
@@ -74,9 +78,11 @@ class OpenAiAssistantFuncManager:
     def callFunction(self, fnName:str, args:dict) -> str:
         for func in self.functions:
             if func.name() == fnName:
-                args = eval(args, None, None)
-                print(f"Args: {args}")
+                print(f"Func: {fnName}, Args: {args}")
+                args = json.loads(args)
                 results = f"{func.call(**args)}"
-                print(f"Results: {results}")
+                # print(f"Results: {results}")
                 return results
-        raise ValueError(f"Function not found: {fnName}")
+        err = ValueError(f"Function not found: {fnName}")
+        print(f"{err}")
+        return f"{err}"

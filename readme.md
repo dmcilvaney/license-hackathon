@@ -15,7 +15,7 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-if ! az account show > /dev/null 2>&1; then
+if ! az vm list > /dev/null 2>&1; then
     az login --use-device-code
 fi
 export AZURE_OPENAI_ENDPOINT="https://damcilva-license-check-test.openai.azure.com/"
