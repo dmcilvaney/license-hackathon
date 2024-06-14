@@ -78,7 +78,7 @@ class OpenAiAssistantFuncManager:
     def callFunction(self, fnName:str, args:dict) -> str:
         for func in self.functions:
             if func.name() == fnName:
-                print(f"Func: {fnName}, Args: {args}")
+                print(f"\t{fnName}\n\t\tArgs: {args}")
                 args = json.loads(args)
                 results = f"{func.call(**args)}"
                 # print(f"Results: {results}")

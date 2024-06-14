@@ -27,3 +27,16 @@ export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
 # Assistant agent
 ./assistant/assistant.py "./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm"
 ```
+
+## Demo
+
+```bash
+
+echo "" && echo "SPECS in $PWD/nano-testing/build/SPECS/:" && ls nano-testing/build/SPECS/ && \
+echo "" && echo "SRPMS in $PWD/nano-testing/srpms/:" && ls nano-testing/srpms && \
+echo "" && echo "RPMS in $PWD/nano-testing/rpms/:" && ls nano-testing/rpms && \
+echo "" && echo "Soure Files in $PWD/nano-testing/build/BUILD/nano-6.0/:" && ls  nano-testing/build/BUILD/nano-6.0 | tail -n 7 && echo "..."
+
+
+./assistant/assistant.py ./nano-testing/rpms/*.rpm ./nano-testing/build/SPECS/nano.spec ./nano-testing/srpms/nano-6.0-2.cm2.src.rpm
+```
