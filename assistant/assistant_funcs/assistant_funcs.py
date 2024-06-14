@@ -4,10 +4,10 @@
 import json
 
 class OpenAIAssistantFunc:
-    def __init__(self, fnName:str, fnDescription:str, fnParameters:dict) -> None:
-        self.__fnName = fnName
-        self.__fnDescription = fnDescription
-        self.__fnParameters = fnParameters
+    def __init__(self, fn_name:str, fn_description:str, fn_parameters:dict) -> None:
+        self.__fnName = fn_name
+        self.__fnDescription = fn_description
+        self.__fnParameters = fn_parameters
 
     def name(self) -> str:
         return self.__fnName
