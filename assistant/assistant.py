@@ -100,7 +100,7 @@ def create_assistant(tools):
         "- a package with other types of files may not require a license\n"
         "- a package may use a 'Requires' directive to pull in a license file from another sub-package in the same .spec file\n"
         "- etc.\n"
-        " (e.g. a -devel package may require the license file from the main package, or a main package may use the license files from a -libs subpackage) "
+        " (e.g. a '-devel' package may require the license file from the main package, or a main package may use the license files from a '-libs' subpackage) "
         "Consider the interdependencies between packages when determining if a license file is required. Any such dependencies must be explicitly stated in the .spec file, or "
         "validated via querying the .rpm files' dependencies. Documentation is insufficient to ensure license compliance. "
         "The .spec file should be considered unreliable, as it may not accurately reflect the actual licensing requirements of the package. Use rpm_dependency_info() to validate all dependencies "
@@ -120,10 +120,10 @@ def get_all_tools():
     tools.addFunction(rpm.rpm.RpmDependencyInfo())
     tools.addFunction(rpm.rpm.RpmReadFile())
     tools.addFunction(spec.spec.SpecContents())
-    tools.addFunction(assistant_funcs.assistant_funcs.APIFeedbackFunc())
-    tools.addFunction(ProvideAssessmentFunc())
     tools.addFunction(srpm.srpm.SrpmExploreFiles())
     tools.addFunction(srpm.srpm.SrpmReadFile())
+    tools.addFunction(assistant_funcs.assistant_funcs.APIFeedbackFunc())
+    tools.addFunction(ProvideAssessmentFunc())
 
     # import json
     # print(json.dumps(tools.getFunctions(), indent=2))
@@ -143,7 +143,6 @@ class ThreadRunner:
     def __start_new_thread(self, prompt):
 
         self.thread = self.client.beta.threads.create()
-        print(f"Create thread {self.thread.id}")
         if prompt:
             self.add_prompt(prompt)
 
@@ -154,18 +153,21 @@ class ThreadRunner:
             content=str(prompt),
             timeout=timeout_override,
         )
-        print(f"Adding message {message.id} to thread {self.thread.id}")
 
-    def run_agent(self):
+    def run_agent(self, force_tool=None):
+        if not force_tool:
+            tool_selection = "auto"
+        else:
+            tool_selection = force_tool.choice()
         self.run = self.client.beta.threads.runs.create(
             thread_id=self.thread.id,
             assistant_id=self.assistant.id,
             timeout=timeout_override,
+            tool_choice=tool_selection,
         )
-        print(f"Run {self.run.id} created for thread {self.thread.id}")
         self.__run_thread()
 
-    def get_last_n_results(self, n=0):
+    def get_last_n_results(self, n=0, include_names=True):
         if self.run.status != "completed":
             print(self.run.model_dump_json(indent=2))
             exit(1)
@@ -181,7 +183,13 @@ class ThreadRunner:
             content_list = message.content
             for content in content_list:
                 if content.type == "text":
-                    results.append(f"{message.role}:{content.text.value}")
+                    if include_names:
+                        result_string = f"{message.role}:"
+                        for line in  content.text.value.split("\n"):
+                            result_string += f"\n>\t{line}"
+                        results.append(result_string)
+                    else:
+                        results.append(content.text.value)
                 else:
                     raise ValueError(f"Unhandled content type: {content.type}")
             results.append("\n")
@@ -189,15 +197,16 @@ class ThreadRunner:
 
     # TODO: YucK https://community.openai.com/t/any-way-to-duplicate-a-thread/660969/2
     def __wait_for_run(self):
-        sleep = 3
+        sleep = 1
         start_time = time.time()
         time.sleep(sleep)
 
         self.run = self.client.beta.threads.runs.retrieve(thread_id=self.thread.id,run_id=self.run.id)
         while self.run.status not in ["completed", "cancelled", "expired", "failed", "requires_action"]:
-            print(f"Waiting for response... Run status:'{self.run.status}' ({int(time.time() - start_time)} / {timeout_override} seconds)")
+            time_elapsed = int(time.time() - start_time)
+            if time_elapsed % 10 == 0:
+                print(f"Waiting for response... Run status:'{self.run.status}' ({time_elapsed} / {timeout_override} seconds)")
             time.sleep(sleep)
-            sleep += 1
 
             self.run = self.client.beta.threads.runs.retrieve(thread_id=self.thread.id,run_id=self.run.id)
             # Cancel the run if we get stuck.
@@ -281,10 +290,16 @@ if __name__ == "__main__":
 
     # summary = runner.get_last_n_results(1)
 
+    print(f"\n\n**** CONSIDERING FILES ****\n")
+    for f in files:
+        print(f"\t{f}")
+
+    package_results_text = {}
     for f in files:
         # only care about .rpms
-        if not f.endswith(".rpm"):
+        if not f.endswith(".rpm") or f.endswith(".src.rpm"):
             continue
+        print(f"\n\n**** EXAMINING {f} ****\n")
         runner.add_prompt(
             f"From first principles, please double check that there are no licensing concerns for '{f}'. Consider the following:\n"
             "- Does the .rpm need license files based on its contents?\n"
@@ -300,30 +315,53 @@ if __name__ == "__main__":
             f"Avoid using {ProvideAssessmentFunc().name()} until directed to do so."
             )
         runner.run_agent()
-        print(runner.get_last_n_results(1)[0])
+        package_results_text[f] = runner.get_last_n_results(1,False)[0]
+
+    print("\n\n**** GENERATING SUMMARY ****\n")
 
     runner.add_prompt("If any of the above packages have licensing concerns, please summarize them here, otherwise state that all packages are clear.")
     runner.run_agent()
-    print(runner.get_last_n_results(1)[0])
+    summary_text = runner.get_last_n_results(1,False)[0]
+
+    print("\n\n**** GENERATING SUGGESTIONS ****\n")
 
     runner.add_prompt("Please provide suggestions on how to improve the licensing situation specifically for the packages discussed above.")
     runner.run_agent()
-    print(runner.get_last_n_results(1)[0])
+    suggestions_text = runner.get_last_n_results(1,False)[0]
+
+    print("\n\n**** GATHERING ISSUES ****\n")
 
     runner.add_prompt(
-        f"Now please accurately record each licensing concern using the {ProvideAssessmentFunc().name()} function. Use multiple calls to avoid "
+        f"Now please accurately record each licensing concern using the {ProvideAssessmentFunc().name()} function. Use multiple calls to avoid\n"
         f"having multiple issues per entry. For complexness add at least one entry for each package ({files}) even if there are no issues.\n"
         "Stop once you have recorded all issues via the API."
     )
     runner.run_agent()
 
-    print(f"Used {runner.run.usage.total_tokens} tokens.")
-    print()
-    print("*** ISSUES ***")
+    print("\n\n**** SUMMARY ****\n")
+    print(f"\tUsed {runner.run.usage.total_tokens} tokens.\n")
+    print(summary_text)
+
+    print("\n\n**** SUGGESTIONS ****\n")
+    print(suggestions_text)
+
+    print("\n\n**** ISSUES ****\n")
     for issue in ProvideAssessmentFunc.get_issues():
         file_basename = os.path.basename(issue["file"])
         print(f"File: {file_basename},\n\tSeverity: {issue['severity']},\n\tDescription: {issue['description']}")
     print()
+
+
+    summary_path = "summary.txt"
+    print(f"\n\n**** SAVING CONVERSATION TO {summary_path} ****\n")
+    with open(summary_path, "w") as f:
+        f.write(f"Findings for {files}:\n")
+        for issue in ProvideAssessmentFunc.get_issues():
+            file_basename = os.path.basename(issue["file"])
+            f.write(f"File: {file_basename},\n\tSeverity: {issue['severity']},\n\tDescription: {issue['description']}\n")
+        f.write("\n")
+        f.write("Conversation:\n")
+        f.writelines(runner.get_last_n_results())
 
     # p2 = f"An analysis of the accuracy of licensing in {files} will follow this message. Please validate it. Work through each assertion from first principles."
     # runner2 = ThreadRunner(
@@ -336,3 +374,9 @@ if __name__ == "__main__":
     # runner2.run_agent()
     # for result in runner2.get_last_n_results():
     #     print(result)
+
+    # runner.add_prompt(f"Please provide feedback on the API so this process can be improved for next time. Be honest, but constructive. "
+    #                   "Try to find at least 4 meaty, actionable points that would improve accuracy or performance. "
+    #                   "Use the {assistant_funcs.assistant_funcs.APIFeedbackFunc().name()} function for each bit of feedback."
+    #                   )
+    # runner.run_agent(force_tool=assistant_funcs.assistant_funcs.APIFeedbackFunc())

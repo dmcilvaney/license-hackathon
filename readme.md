@@ -32,6 +32,10 @@ export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
 
 ```bash
 
+asciinema rec demo.cast
+
+clear
+
 echo "" && echo "SPECS in $PWD/nano-testing/build/SPECS/:" && ls nano-testing/build/SPECS/ && \
 echo "" && echo "SRPMS in $PWD/nano-testing/srpms/:" && ls nano-testing/srpms && \
 echo "" && echo "RPMS in $PWD/nano-testing/rpms/:" && ls nano-testing/rpms && \

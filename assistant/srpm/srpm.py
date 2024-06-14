@@ -63,6 +63,7 @@ class SrpmExploreFiles(assistant_funcs.OpenAIAssistantFunc):
             "max_depth": {
                 "type": "integer",
                 "description": "OPTIONAL (default '2'): From the search_dir, limit the depth of the search. ie 1 would only list the immediate children of the search_dir. 0 means no limit."
+                "Because of the layout of rpm build directories (package sources are often inside a '<pkg>' directory), setting this to at least 2 is recommended."
             }
         }
 
