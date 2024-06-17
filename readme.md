@@ -25,7 +25,7 @@ export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
 ./test1.py
 
 # Assistant agent
-./assistant/assistant.py "./nano-testing/rpms/nano-6.0-2.cm2.x86_64.rpm"
+./assistant/assistant.py ./nano-testing/rpms/*.rpm ./nano-testing/build/SPECS/nano.spec ./nano-testing/srpms/nano-6.0-2.cm2.src.rpm
 ```
 
 ## Demo

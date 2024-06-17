@@ -19,9 +19,9 @@ timeout_override = 120
 
 class ProvideAssessmentFunc(assistant_funcs.assistant_funcs.OpenAIAssistantFunc):
     issue_list = []
-    __declareIssueName = "provide_assessment"
-    __declareIssueDescription = "Provide an assessment of the licensing situation for the provided packages."
-    __declareIssueParameters = {
+    __provide_assessment_name = "provide_assessment"
+    __provide_assessment_description = "Provide an assessment of the licensing situation for the provided packages."
+    __provide_assessment_parameters = {
         "file": {
             "type": "string",
             "description": "REQUIRED: The file to declare an issue with."
@@ -42,7 +42,7 @@ class ProvideAssessmentFunc(assistant_funcs.assistant_funcs.OpenAIAssistantFunc)
     }
 
     def __init__(self) -> None:
-        super().__init__(self.__declareIssueName, self.__declareIssueDescription, self.__declareIssueParameters)
+        super().__init__(self.__provide_assessment_name, self.__provide_assessment_description, self.__provide_assessment_parameters)
 
     def call(self, file, has_issue, severity="none", description=None) -> str:
         if not file:
@@ -67,6 +67,29 @@ class ProvideAssessmentFunc(assistant_funcs.assistant_funcs.OpenAIAssistantFunc)
 
     def get_issues():
         return ProvideAssessmentFunc.issue_list
+
+class RequestAnalysis(assistant_funcs.assistant_funcs.OpenAIAssistantFunc):
+    analysis_list = []
+    __request_analysis_Name = "request_analysis"
+    __request_analysis_Description = "Mark a file for further inspection"
+    __request_analysis_Parameters = {
+        "file": {
+            "type": "string",
+            "description": "REQUIRED: The file to investigate further."
+        },
+    }
+
+    def __init__(self) -> None:
+        super().__init__(self.__request_analysis_Name, self.__request_analysis_Description, self.__request_analysis_Parameters)
+
+    def call(self, file) -> str:
+        if not file:
+            return "File is required."
+        self.analysis_list.append(file)
+        return f"Assessment for '{file}' added."
+
+    def get_files():
+        return RequestAnalysis.analysis_list
 
 
 def create_assistant(tools):
@@ -124,6 +147,7 @@ def get_all_tools():
     tools.addFunction(srpm.srpm.SrpmReadFile())
     tools.addFunction(assistant_funcs.assistant_funcs.APIFeedbackFunc())
     tools.addFunction(ProvideAssessmentFunc())
+    tools.addFunction(RequestAnalysis())
 
     # import json
     # print(json.dumps(tools.getFunctions(), indent=2))
@@ -137,6 +161,7 @@ class ThreadRunner:
         self.tools = tools
         self.thread = None
         self.run = None
+        self.last_line_printed_idx = None
         # Initialize a new thread
         self.__start_new_thread(initial_prompt)
 
@@ -166,6 +191,14 @@ class ThreadRunner:
             tool_choice=tool_selection,
         )
         self.__run_thread()
+
+    def get_new_results(self):
+        # Print all the results we haven't seen yet.
+        results = self.get_last_n_results()
+        if self.last_line_printed_idx:
+            results = results[self.last_line_printed_idx:]
+        self.last_line_printed_idx = len(results)
+        return results
 
     def get_last_n_results(self, n=0, include_names=True):
         if self.run.status != "completed":
@@ -243,20 +276,90 @@ class ThreadRunner:
                     tool_outputs=tool_results,
                     timeout=timeout_override,
                 )
+
+# TODO: Test of a deepscanner, WIP
+def deepscan_testing(client, license_assistant, tools, files):
+    deep_scan_runner = ThreadRunner(
+            client,
+            license_assistant,
+            tools,
+        )
+    analysis_runner = ThreadRunner(
+            client,
+            license_assistant,
+            tools,
+        )
+    srpm_files = [f for f in files if f.endswith(".src.rpm")]
+    deep_scan_runner.add_prompt(
+        f"Analyse the contents of the following files:'{srpm_files}' and decide if any files need investigation. The end goal is "
+        "to decide if the licensing information for the project is correct. A separate agent will be responsible for making the final "
+        "assessment. Your job is to identify any files that might affect the licensing situation as quickly as possible. Be selective, "
+        " each analysis may be time consuming. Pick only those files that are likely to cause issues with licensing. If required "
+        f" you may examine a file in detail with the {srpm.srpm.SrpmReadFile().name()} function to ensure the files are actually interesting. "
+        "Consider marking suspect source files for analysis, to see if their headers match the expected licenses (be selective however). Feel free to investigate "
+        "some files to determine what they are for, if you aren't sure, but again do try to be selective."
+    )
+    analysis_runner.add_prompt(
+        f"Another agent is generating a list of interesting files to investigate which are from {srpm_files}. Please determine from first principles what the required licensing situation is for this package. "
+        " Do not assume that the current licensing files are sufficient, there may be hidden additional licensing requirements. You may investigate the source files as needed, even "
+        " those that are not flagged by the other agent."
+    )
+    src_files = srpm.srpm.SrpmExploreFiles().srpm_explore_contents(srpm_file="nano.src.rpm", search_dir=".", max_depth=0)
+    # remove anything that doesn't start with 'file:', and remove the 'file:' prefix
+    src_files = [f.removeprefix("file:") for f in src_files if f.startswith("file:")]
+    # Split the files into groups
+    group_size = 30
+    grouped_files = [src_files[i:i + group_size] for i in range(0, len(src_files), group_size)]
+
+    for g in grouped_files:
+        print(g)
+        deep_scan_runner.add_prompt(
+            f"Should any of the following files be investigated further? Indicate any positive results via the {RequestAnalysis().name()} function. {g}"
+        )
+        deep_scan_runner.run_agent()
+
+    groups_requests = [RequestAnalysis.get_files()[i:i + group_size] for i in range(0, len(RequestAnalysis.get_files()), group_size)]
+    for r in groups_requests:
+        print(r)
+        analysis_runner.add_prompt(
+            f"The other agent thought the following files were interesting: {r}. Determine if they have any licensing concerns. Hold a full review for later, you will be asked "
+            "specifically to provide one when needed. Most importantly, ensure that you have an accurate list of all the licenses used in the package."
+        )
+        analysis_runner.run_agent()
+
+    print("\n\n**** DEEP SCAN RESULTS ****\n")
+    analysis_runner.add_prompt(
+        f"Complete a full review, then provide a summary of the licensing situation for the files: {srpm_files}. "
+    )
+    analysis_runner.run_agent()
+
+    for l in analysis_runner.get_new_results():
+        print(l)
+
+    analysis_runner.add_prompt(f"Check if the package {files} match the expected licenses you found. Submit any issues via the {ProvideAssessmentFunc().name()} function. "
+                               "The package is not trusted, your job is to validate that is correct.")
+    analysis_runner.run_agent()
+    for l in analysis_runner.get_new_results():
+        print(l)
+
 # TODO: STreaming? https://learn.microsoft.com/en-us/azure/ai-services/openai/assistants-reference-runs?tabs=python#stream-a-run-result-preview
 if __name__ == "__main__":
     # Parse user inputs. Usage: `python3 assistant.py <path to .rpm file>`
     # TODO: Do this properly
-    if len(sys.argv) < 2:
+    do_deepscan = "--deepscan" in sys.argv
+    args = [a for a in sys.argv if not a.startswith("--")]
+    if len(args) < 2:
         raise ValueError("Usage: python3 assistant.py <path to file1> ...")
-    files = []
-    for i in range(1, len(sys.argv)):
-        files.append(sys.argv[i])
-
+    files = args[1:]
+    print(files)
     # TODO: Track files better, we don't want to expose our file system to the assistant
 
     tools = get_all_tools()
     client, license_assistant = create_assistant(tools)
+
+    if do_deepscan:
+        deepscan_testing(client, license_assistant, tools, files)
+        exit(0)
 
     #thread = start_new_thread(client, "Analyse the contents of the following files:{files} and determine if they contain suitable license files. Validate the actual contents of any license files you find and ensure that all references are correct.")
     #p1 = f"Analyse the contents of the following files:{files} and determine if they contain suitable license files. Validate the actual contents of any license files you find and ensure that all references are correct.",

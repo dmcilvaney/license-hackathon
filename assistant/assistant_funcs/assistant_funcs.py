@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import json
+import os
 
 class OpenAIAssistantFunc:
     def __init__(self, fn_name:str, fn_description:str, fn_parameters:dict) -> None:
@@ -64,6 +65,7 @@ class APIFeedbackFunc(OpenAIAssistantFunc):
         return f"Feedback received for {api}, thankyou!)"
 
 class OpenAiAssistantFuncManager:
+    prints = True
     def __init__(self) -> None:
         self.functions = []
 
@@ -78,9 +80,14 @@ class OpenAiAssistantFuncManager:
     def callFunction(self, fnName:str, args:dict) -> str:
         for func in self.functions:
             if func.name() == fnName:
-                print(f"\t{fnName}\n\t\tArgs: {args}")
-                args = json.loads(args)
-                results = f"{func.call(**args)}"
+                if self.prints:
+                    print(f"\t{fnName}\n\t\tArgs: {args}")
+                try:
+                    args = json.loads(args)
+                    results = f"{func.call(**args)}"
+                except Exception as e:
+                    print(f"Error: {e}")
+                    return f"Error calling tool: {e}"
                 # print(f"Results: {results}")
                 return results
         err = ValueError(f"Function not found: {fnName}")

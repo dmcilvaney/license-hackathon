@@ -86,7 +86,7 @@ class SrpmExploreFiles(assistant_funcs.OpenAIAssistantFunc):
             return f"{err}"
         return self.srpm_explore_contents(srpm_file, search_dir, max_depth)
 
-    def srpm_explore_contents(self, srpm_file: str, search_dir:str, depth: int) -> list[str]:
+    def srpm_explore_contents(self, srpm_file: str, search_dir:str, max_depth: int) -> list[str]:
         build_dir = srpm_cache.get_from_cache(srpm_file)
         #base_path_abs = sanitize_path(build_dir, ".")
         try:
@@ -102,7 +102,7 @@ class SrpmExploreFiles(assistant_funcs.OpenAIAssistantFunc):
         for root, dir_list, file_list in os.walk(final_path):
             relative_depth = root.count(os.path.sep) - base_depth
 
-            if depth > 0 and relative_depth >= depth:
+            if max_depth > 0 and relative_depth >= max_depth:
                 continue
 
             dirs.extend([os.path.join(root, dir) for dir in dir_list])
