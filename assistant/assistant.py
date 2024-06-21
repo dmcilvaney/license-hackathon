@@ -296,8 +296,9 @@ def deepscan_testing(client, license_assistant, tools, files):
         "assessment. Your job is to identify any files that might affect the licensing situation as quickly as possible. Be selective, "
         " each analysis may be time consuming. Pick only those files that are likely to cause issues with licensing. If required "
         f" you may examine a file in detail with the {srpm.srpm.SrpmReadFile().name()} function to ensure the files are actually interesting. "
-        "Consider marking suspect source files for analysis, to see if their headers match the expected licenses (be selective however). Feel free to investigate "
-        "some files to determine what they are for, if you aren't sure, but again do try to be selective."
+        "Consider marking suspect source files for analysis, to see if their headers match the expected licenses (be selective however, there is not reason to "
+        " add duplicated information: i.e. if a type of file with license 'A' is already marked for analysis, adding multiple additional files with license 'A' is pointless). "
+        "Feel free to investigate files to determine what they are for, if you aren't sure."
     )
     analysis_runner.add_prompt(
         f"Another agent is generating a list of interesting files to investigate which are from {srpm_files}. Please determine from first principles what the required licensing situation is for this package. "
@@ -397,6 +398,16 @@ if __name__ == "__main__":
     for f in files:
         print(f"\t{f}")
 
+    # Gather the .src.rpm and .spec files, we should only have one of each
+    srpm_file = [f for f in files if f.endswith(".src.rpm")]
+    spec_file = [f for f in files if f.endswith(".spec")]
+    if len(srpm_file) != 1 or len(spec_file) != 1:
+        raise ValueError(f"You must provide exactly one .src.rpm file and one .spec file, got: {srpm_file} and {spec_file}")
+    srpm_file = srpm_file[0]
+    spec_file = spec_file[0]
+
+    runner.add_prompt("A list of rpm packages will be provided for analysis. Please examine each package for licensing concerns. "
+                      f"They are all created as part of a single build from {spec_file} and {srpm_file}. ")
     package_results_text = {}
     for f in files:
         # only care about .rpms
@@ -415,6 +426,7 @@ if __name__ == "__main__":
             " - Are there any other licensing concerns?\n"
             "Please provide a brief summary for each point, along with any other relevant information. "
             "Each accurate assessment which passes muster during legal review will be rewarded with $500. "
+            f"All packages are created from the same .spec and .src.rpm files: {spec_file} and {srpm_file}."
             f"Avoid using {ProvideAssessmentFunc().name()} until directed to do so."
             )
         runner.run_agent()

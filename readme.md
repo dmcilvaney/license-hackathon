@@ -24,8 +24,11 @@ export CHAT_COMPLETIONS_DEPLOYMENT_NAME="test1"
 # Story agent
 ./test1.py
 
-# Assistant agent
+# Assistant agent for nano pacakge
 ./assistant/assistant.py ./nano-testing/rpms/*.rpm ./nano-testing/build/SPECS/nano.spec ./nano-testing/srpms/nano-6.0-2.cm2.src.rpm
+
+# Or for perl package (WARNING, this is SLOW!)
+./assistant/assistant.py ./perl-testing/rpms/*.rpm ./perl-testing/build/SPECS/perl.spec ./perl-testing/srpms/perl-5.32.0-1.cm2.src.rpm
 ```
 
 ## Demo

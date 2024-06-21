@@ -9,7 +9,6 @@
 # Each function may then be called by passing it a dictionary with the required parameters.
 
 import os
-import subprocess
 import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)) + "/../")
 
@@ -36,7 +35,16 @@ class SrpmCache:
     def get_from_cache(self, srpm_file):
         if not srpm_file in self.srpm_cache:
             # Hack for testing, hard-code the topdir
-            self.srpm_cache[srpm_file] = SrpmCache.SrpmCacheEntry("/home/damcilva/repos/license-hackathon/nano-testing/build/BUILD")
+            if "perl" in srpm_file:
+                self.srpm_cache[srpm_file] = SrpmCache.SrpmCacheEntry("./perl-testing/build/BUILD")
+            elif "nano" in srpm_file:
+                self.srpm_cache[srpm_file] = SrpmCache.SrpmCacheEntry("./nano-testing/build/BUILD")
+            else:
+                raise ValueError(f"SRPM file '{srpm_file}' not found in cache.")
+        # Ensure the dir exists!
+        if not os.path.exists(self.srpm_cache[srpm_file].top_build_dir):
+            raise ValueError(f"SRPM file '{srpm_file}' not found on disk!")
+
         return self.srpm_cache[srpm_file].top_build_dir
 
 srpm_cache = SrpmCache()
@@ -193,3 +201,6 @@ if __name__ == "__main__":
 
     srpm_reader = SrpmReadFile()
     print(srpm_reader.srpm_read_file("nano.src.rpm", "./nano-6.0/src/nano.c", 10))
+
+    for line in srpm.srpm_explore_contents("perl.src.rpm", ".", 1):
+        print(line)

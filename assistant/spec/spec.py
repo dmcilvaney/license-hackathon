@@ -22,25 +22,35 @@ class SpecContents(assistant_funcs.OpenAIAssistantFunc):
         "spec_file": {
             "type": "string",
             "description": "The path to the .spec file.",
-        }
+        },
+        "force_read": {
+            "type": "boolean",
+            "description": "Force reading the file again, even if it was already read.",
+            "default": False,
+        },
     }
 
     def __init__(self) -> None:
         super().__init__(self.__specContentsName, self.__specContentsDescription, self.__specContentsParameters)
+        self.was_read = {}
 
-    def call(self, spec_file:str) -> str:
+    def call(self, spec_file:str, force:bool=False) -> str:
         # Check if file exists!
         abs_path = os.path.abspath(spec_file)
         if not os.path.exists(abs_path):
             err = ValueError(f"File not found: {abs_path}")
             return f"{err}"
-        return self.read_spec_file(spec_file)
+        return self.read_spec_file(spec_file, force)
 
-    def read_spec_file(self, filePath: str) -> str:
+    def read_spec_file(self, filePath: str, force:bool) -> str:
         # Only read .spec files
         if not filePath.endswith(".spec"):
             return "Invalid file type. Must be a .spec file."
-        print(f"Reading spec file: {filePath}")
+        # Check if the file was already read
+        if filePath in self.was_read and not force:
+            err = ValueError(f"File already read: {filePath}, use force_read=True to force a re-read.")
+            return f"{err}"
+        self.was_read[filePath] = True
         # Read each line of the file, joining into a single string
         with open(filePath, 'r') as file:
             return file.read()
